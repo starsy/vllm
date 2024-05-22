@@ -141,28 +141,10 @@ async def create_embedding(request: EmbeddingRequest, raw_request: Request):
 if __name__ == "__main__":
     args = parse_args()
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=args.allowed_origins,
-        allow_credentials=args.allow_credentials,
-        allow_methods=args.allowed_methods,
-        allow_headers=args.allowed_headers,
-    )
-
-    if token := envs.VLLM_API_KEY or args.api_key:
-
-        @app.middleware("http")
-        async def authentication(request: Request, call_next):
-            root_path = "" if args.root_path is None else args.root_path
-            if request.method == "OPTIONS":
-                return await call_next(request)
-            if not request.url.path.startswith(f"{root_path}/v1"):
-                return await call_next(request)
-            if request.headers.get("Authorization") != "Bearer " + token:
-                return JSONResponse(content={"error": "Unauthorized"},
-                                    status_code=401)
-            return await call_next(request)
-
+    # Based on the FastAPI (starlette) add_middleware() implementation, the
+    # last middleware added will be the first to be called, so we need to
+    # reverse the adding order of the middlewares. CORS should be the first
+    # middleware to be called thus we need to add it last.
     for middleware in args.middleware:
         module_path, object_name = middleware.rsplit(".", 1)
         imported = getattr(importlib.import_module(module_path), object_name)
@@ -173,6 +155,26 @@ if __name__ == "__main__":
         else:
             raise ValueError(f"Invalid middleware {middleware}. "
                              f"Must be a function or a class.")
+
+    if token := envs.VLLM_API_KEY or args.api_key:
+
+        @app.middleware("http")
+        async def authentication(request: Request, call_next):
+            root_path = "" if args.root_path is None else args.root_path
+            if not request.url.path.startswith(f"{root_path}/v1"):
+                return await call_next(request)
+            if request.headers.get("Authorization") != "Bearer " + token:
+                return JSONResponse(content={"error": "Unauthorized"},
+                                    status_code=401)
+            return await call_next(request)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=args.allowed_origins,
+        allow_credentials=args.allow_credentials,
+        allow_methods=args.allowed_methods,
+        allow_headers=args.allowed_headers,
+    )
 
     logger.info("vLLM API server version %s", vllm.__version__)
     logger.info("args: %s", args)
